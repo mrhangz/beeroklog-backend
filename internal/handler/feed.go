@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mrhangz/beeroklog-backend/internal/model"
@@ -49,7 +50,10 @@ func (h *FeedHandler) Latest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.attachPhotos(r, reviews)
+	if err := loadPhotos(r.Context(), h.db, reviews); err != nil {
+		respondError(w, http.StatusInternalServerError, "load photos failed")
+		return
+	}
 
 	respondJSON(w, http.StatusOK, model.PaginatedResponse{
 		Data:       reviews,
@@ -95,7 +99,10 @@ func (h *FeedHandler) ByBeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.attachPhotos(r, reviews)
+	if err := loadPhotos(r.Context(), h.db, reviews); err != nil {
+		respondError(w, http.StatusInternalServerError, "load photos failed")
+		return
+	}
 
 	respondJSON(w, http.StatusOK, model.PaginatedResponse{
 		Data:       reviews,
@@ -141,7 +148,10 @@ func (h *FeedHandler) ByUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.attachPhotos(r, reviews)
+	if err := loadPhotos(r.Context(), h.db, reviews); err != nil {
+		respondError(w, http.StatusInternalServerError, "load photos failed")
+		return
+	}
 
 	respondJSON(w, http.StatusOK, model.PaginatedResponse{
 		Data:       reviews,
@@ -151,7 +161,7 @@ func (h *FeedHandler) ByUser(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func scanFeedReviews(rows interface{ Next() bool; Scan(...interface{}) error }) ([]model.Review, error) {
+func scanFeedReviews(rows pgx.Rows) ([]model.Review, error) {
 	var reviews []model.Review
 	for rows.Next() {
 		var rev model.Review
@@ -171,29 +181,5 @@ func scanFeedReviews(rows interface{ Next() bool; Scan(...interface{}) error }) 
 	if reviews == nil {
 		reviews = []model.Review{}
 	}
-	return reviews, nil
-}
-
-func (h *FeedHandler) attachPhotos(r *http.Request, reviews []model.Review) {
-	for i := range reviews {
-		rows, err := h.db.Query(r.Context(),
-			`SELECT id, review_id, storage_key, sort_order
-			 FROM review_photos WHERE review_id = $1 ORDER BY sort_order`, reviews[i].ID)
-		if err != nil {
-			continue
-		}
-		var photos []model.ReviewPhoto
-		for rows.Next() {
-			var p model.ReviewPhoto
-			if err := rows.Scan(&p.ID, &p.ReviewID, &p.StorageKey, &p.SortOrder); err != nil {
-				break
-			}
-			photos = append(photos, p)
-		}
-		rows.Close()
-		if photos == nil {
-			photos = []model.ReviewPhoto{}
-		}
-		reviews[i].Photos = photos
-	}
+	return reviews, rows.Err()
 }

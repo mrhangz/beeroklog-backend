@@ -23,85 +23,49 @@ func (h *BeerHandler) List(w http.ResponseWriter, r *http.Request) {
 	page, perPage := parsePage(r)
 	offset := (page - 1) * perPage
 	q := r.URL.Query().Get("q")
+	pattern := "%" + q + "%"
 
 	var totalCount int
-	var beers []model.Beer
-
-	if q != "" {
-		pattern := "%" + q + "%"
-
-		err := h.db.QueryRow(r.Context(),
-			`SELECT count(*) FROM beers WHERE lower(name) LIKE lower($1) OR lower(brewery) LIKE lower($1)`, pattern,
-		).Scan(&totalCount)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, "query failed")
-			return
-		}
-
-		rows, err := h.db.Query(r.Context(),
-			`SELECT b.id, b.name, b.brewery, b.style, b.abv, b.created_by, b.created_at,
-			        COALESCE(avg(r.rating), 0), count(r.id)
-			 FROM beers b
-			 LEFT JOIN reviews r ON r.beer_id = b.id
-			 WHERE lower(b.name) LIKE lower($1) OR lower(b.brewery) LIKE lower($1)
-			 GROUP BY b.id
-			 ORDER BY b.name
-			 LIMIT $2 OFFSET $3`, pattern, perPage, offset)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, "query failed")
-			return
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var b model.Beer
-			var avg float64
-			var cnt int
-			if err := rows.Scan(&b.ID, &b.Name, &b.Brewery, &b.Style, &b.ABV, &b.CreatedBy, &b.CreatedAt, &avg, &cnt); err != nil {
-				respondError(w, http.StatusInternalServerError, "scan failed")
-				return
-			}
-			b.AvgRating = &avg
-			b.ReviewCount = &cnt
-			beers = append(beers, b)
-		}
-	} else {
-		err := h.db.QueryRow(r.Context(), `SELECT count(*) FROM beers`).Scan(&totalCount)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, "query failed")
-			return
-		}
-
-		rows, err := h.db.Query(r.Context(),
-			`SELECT b.id, b.name, b.brewery, b.style, b.abv, b.created_by, b.created_at,
-			        COALESCE(avg(r.rating), 0), count(r.id)
-			 FROM beers b
-			 LEFT JOIN reviews r ON r.beer_id = b.id
-			 GROUP BY b.id
-			 ORDER BY b.name
-			 LIMIT $1 OFFSET $2`, perPage, offset)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, "query failed")
-			return
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var b model.Beer
-			var avg float64
-			var cnt int
-			if err := rows.Scan(&b.ID, &b.Name, &b.Brewery, &b.Style, &b.ABV, &b.CreatedBy, &b.CreatedAt, &avg, &cnt); err != nil {
-				respondError(w, http.StatusInternalServerError, "scan failed")
-				return
-			}
-			b.AvgRating = &avg
-			b.ReviewCount = &cnt
-			beers = append(beers, b)
-		}
+	err := h.db.QueryRow(r.Context(),
+		`SELECT count(*) FROM beers
+		 WHERE $1 = '' OR lower(name) LIKE lower($2) OR lower(brewery) LIKE lower($2)`, q, pattern,
+	).Scan(&totalCount)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "query failed")
+		return
 	}
 
-	if beers == nil {
-		beers = []model.Beer{}
+	rows, err := h.db.Query(r.Context(),
+		`SELECT b.id, b.name, b.brewery, b.style, b.abv, b.created_by, b.created_at,
+		        COALESCE(avg(r.rating), 0), count(r.id)
+		 FROM beers b
+		 LEFT JOIN reviews r ON r.beer_id = b.id
+		 WHERE $1 = '' OR lower(b.name) LIKE lower($2) OR lower(b.brewery) LIKE lower($2)
+		 GROUP BY b.id
+		 ORDER BY b.name
+		 LIMIT $3 OFFSET $4`, q, pattern, perPage, offset)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	defer rows.Close()
+
+	beers := []model.Beer{}
+	for rows.Next() {
+		var b model.Beer
+		var avg float64
+		var cnt int
+		if err := rows.Scan(&b.ID, &b.Name, &b.Brewery, &b.Style, &b.ABV, &b.CreatedBy, &b.CreatedAt, &avg, &cnt); err != nil {
+			respondError(w, http.StatusInternalServerError, "scan failed")
+			return
+		}
+		b.AvgRating = &avg
+		b.ReviewCount = &cnt
+		beers = append(beers, b)
+	}
+	if err := rows.Err(); err != nil {
+		respondError(w, http.StatusInternalServerError, "scan failed")
+		return
 	}
 
 	respondJSON(w, http.StatusOK, model.PaginatedResponse{

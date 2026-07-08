@@ -12,7 +12,7 @@ type Review struct {
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 
-	Photos []ReviewPhoto `json:"photos,omitempty"`
+	Photos []ReviewPhoto `json:"photos"`
 	Beer   *Beer         `json:"beer,omitempty"`
 	User   *User         `json:"user,omitempty"`
 }

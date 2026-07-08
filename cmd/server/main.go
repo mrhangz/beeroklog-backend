@@ -25,6 +25,13 @@ func main() {
 
 	cfg := config.Load()
 
+	if cfg.JWTSecret == "" || cfg.JWTSecret == config.DefaultJWTSecret {
+		if cfg.AppEnv == "production" {
+			log.Fatal("JWT_SECRET must be set to a strong random value when APP_ENV=production")
+		}
+		log.Println("WARNING: using default JWT_SECRET; set JWT_SECRET before deploying")
+	}
+
 	db, err := database.Connect(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("database: %v", err)
@@ -43,7 +50,7 @@ func main() {
 	authMW := middleware.NewAuth(cfg.JWTSecret)
 	authH := handler.NewAuth(db, cfg)
 	beerH := handler.NewBeer(db)
-	reviewH := handler.NewReview(db)
+	reviewH := handler.NewReview(db, s3)
 	feedH := handler.NewFeed(db)
 	photoH := handler.NewPhoto(db, s3)
 
@@ -52,6 +59,7 @@ func main() {
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP)
 	r.Use(chimw.RequestID)
+	r.Use(middleware.CORS(cfg.CORSAllowedOrigins))
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))

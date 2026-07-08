@@ -6,9 +6,16 @@ import (
 	"time"
 )
 
+// DefaultJWTSecret is the development fallback; main refuses to start with it
+// when APP_ENV=production.
+const DefaultJWTSecret = "change-me-in-production"
+
 type Config struct {
 	Port        string
+	AppEnv      string
 	DatabaseURL string
+
+	CORSAllowedOrigins []string
 
 	JWTSecret     string
 	JWTAccessTTL  time.Duration
@@ -32,9 +39,12 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		Port:        envOr("PORT", "8080"),
+		AppEnv:      envOr("APP_ENV", "development"),
 		DatabaseURL: envOr("DATABASE_URL", "postgres://beeroklog:beeroklog@localhost:5432/beeroklog?sslmode=disable"),
 
-		JWTSecret:     envOr("JWT_SECRET", "change-me-in-production"),
+		CORSAllowedOrigins: parseCommaSeparatedEnv("CORS_ALLOWED_ORIGINS"),
+
+		JWTSecret:     envOr("JWT_SECRET", DefaultJWTSecret),
 		JWTAccessTTL:  parseDuration(envOr("JWT_ACCESS_TTL", "15m")),
 		JWTRefreshTTL: parseDuration(envOr("JWT_REFRESH_TTL", "720h")),
 

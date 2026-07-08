@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -11,14 +13,16 @@ import (
 
 	"github.com/mrhangz/beeroklog-backend/internal/middleware"
 	"github.com/mrhangz/beeroklog-backend/internal/model"
+	"github.com/mrhangz/beeroklog-backend/internal/storage"
 )
 
 type ReviewHandler struct {
 	db *pgxpool.Pool
+	s3 *storage.S3
 }
 
-func NewReview(db *pgxpool.Pool) *ReviewHandler {
-	return &ReviewHandler{db: db}
+func NewReview(db *pgxpool.Pool, s3 *storage.S3) *ReviewHandler {
+	return &ReviewHandler{db: db, s3: s3}
 }
 
 func (h *ReviewHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +58,10 @@ func (h *ReviewHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.attachPhotos(r, reviews)
+	if err := loadPhotos(r.Context(), h.db, reviews); err != nil {
+		respondError(w, http.StatusInternalServerError, "load photos failed")
+		return
+	}
 
 	respondJSON(w, http.StatusOK, model.PaginatedResponse{
 		Data:       reviews,
@@ -84,10 +91,13 @@ func (h *ReviewHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	rev.Beer = &beer
 
-	photos, _ := h.getPhotos(r, rev.ID)
-	rev.Photos = photos
+	reviews := []model.Review{rev}
+	if err := loadPhotos(r.Context(), h.db, reviews); err != nil {
+		respondError(w, http.StatusInternalServerError, "load photos failed")
+		return
+	}
 
-	respondJSON(w, http.StatusOK, rev)
+	respondJSON(w, http.StatusOK, reviews[0])
 }
 
 func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +106,11 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req model.CreateReviewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Rating < 0 || req.Rating > 5 {
+		respondError(w, http.StatusBadRequest, "rating must be between 0 and 5")
 		return
 	}
 
@@ -161,6 +176,12 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rev.Photos = []model.ReviewPhoto{}
+	reviews := []model.Review{rev}
+	if err := loadPhotos(ctx, h.db, reviews); err == nil {
+		rev = reviews[0]
+	}
+
 	respondJSON(w, http.StatusCreated, rev)
 }
 
@@ -171,6 +192,11 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var req model.UpdateReviewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Rating != nil && (*req.Rating < 0 || *req.Rating > 5) {
+		respondError(w, http.StatusBadRequest, "rating must be between 0 and 5")
 		return
 	}
 
@@ -210,7 +236,23 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var removedKeys []string
 	if req.PhotoKeys != nil {
+		oldKeys, err := storageKeysForReview(ctx, tx, id)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "load photos failed")
+			return
+		}
+		kept := make(map[string]bool, len(req.PhotoKeys))
+		for _, key := range req.PhotoKeys {
+			kept[key] = true
+		}
+		for _, key := range oldKeys {
+			if !kept[key] {
+				removedKeys = append(removedKeys, key)
+			}
+		}
+
 		if _, err := tx.Exec(ctx, `DELETE FROM review_photos WHERE review_id = $1`, id); err != nil {
 			respondError(w, http.StatusInternalServerError, "delete photos failed")
 			return
@@ -230,11 +272,23 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.deleteFromS3(removedKeys)
+
 	var rev model.Review
-	_ = h.db.QueryRow(ctx,
+	err = h.db.QueryRow(ctx,
 		`SELECT id, user_id, beer_id, rating, review_text, tasted_at, created_at, updated_at
 		 FROM reviews WHERE id = $1`, id,
 	).Scan(&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "reload failed")
+		return
+	}
+
+	rev.Photos = []model.ReviewPhoto{}
+	reviews := []model.Review{rev}
+	if err := loadPhotos(ctx, h.db, reviews); err == nil {
+		rev = reviews[0]
+	}
 
 	respondJSON(w, http.StatusOK, rev)
 }
@@ -243,6 +297,12 @@ func (h *ReviewHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.GetUserID(r.Context())
 	id := chi.URLParam(r, "id")
 
+	keys, err := storageKeysForReview(r.Context(), h.db, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+
 	tag, err := h.db.Exec(r.Context(),
 		`DELETE FROM reviews WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil || tag.RowsAffected() == 0 {
@@ -250,10 +310,50 @@ func (h *ReviewHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.deleteFromS3(keys)
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- helpers ---
+
+// deleteFromS3 removes photo objects best-effort; DB rows are already gone,
+// so a failure only leaves an orphaned object behind.
+func (h *ReviewHandler) deleteFromS3(keys []string) {
+	if h.s3 == nil {
+		return
+	}
+	for _, key := range keys {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := h.s3.Delete(ctx, key); err != nil {
+			log.Printf("delete s3 object %s: %v", key, err)
+		}
+		cancel()
+	}
+}
+
+type querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func storageKeysForReview(ctx context.Context, db querier, reviewID string) ([]string, error) {
+	rows, err := db.Query(ctx,
+		`SELECT storage_key FROM review_photos WHERE review_id = $1`, reviewID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
 
 func scanReviewsWithBeer(rows pgx.Rows) ([]model.Review, error) {
 	var reviews []model.Review
@@ -272,35 +372,5 @@ func scanReviewsWithBeer(rows pgx.Rows) ([]model.Review, error) {
 	if reviews == nil {
 		reviews = []model.Review{}
 	}
-	return reviews, nil
-}
-
-func (h *ReviewHandler) getPhotos(r *http.Request, reviewID string) ([]model.ReviewPhoto, error) {
-	rows, err := h.db.Query(r.Context(),
-		`SELECT id, review_id, storage_key, sort_order
-		 FROM review_photos WHERE review_id = $1 ORDER BY sort_order`, reviewID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var photos []model.ReviewPhoto
-	for rows.Next() {
-		var p model.ReviewPhoto
-		if err := rows.Scan(&p.ID, &p.ReviewID, &p.StorageKey, &p.SortOrder); err != nil {
-			return nil, err
-		}
-		photos = append(photos, p)
-	}
-	if photos == nil {
-		photos = []model.ReviewPhoto{}
-	}
-	return photos, nil
-}
-
-func (h *ReviewHandler) attachPhotos(r *http.Request, reviews []model.Review) {
-	for i := range reviews {
-		photos, _ := h.getPhotos(r, reviews[i].ID)
-		reviews[i].Photos = photos
-	}
+	return reviews, rows.Err()
 }
