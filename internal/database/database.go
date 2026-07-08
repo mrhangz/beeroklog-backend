@@ -4,6 +4,8 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -15,15 +17,26 @@ import (
 var migrationsFS embed.FS
 
 func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
-		return nil, fmt.Errorf("pgxpool.New: %w", err)
+	var pool *pgxpool.Pool
+	var err error
+
+	for attempt := 1; attempt <= 30; attempt++ {
+		pool, err = pgxpool.New(ctx, databaseURL)
+		if err != nil {
+			log.Printf("db connect attempt %d/30: %v", attempt, err)
+			time.Sleep(time.Second)
+			continue
+		}
+		if err = pool.Ping(ctx); err != nil {
+			pool.Close()
+			log.Printf("db ping attempt %d/30: %v", attempt, err)
+			time.Sleep(time.Second)
+			continue
+		}
+		log.Printf("db connected on attempt %d", attempt)
+		return pool, nil
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("ping: %w", err)
-	}
-	return pool, nil
+	return nil, fmt.Errorf("gave up after 30 attempts: %w", err)
 }
 
 func Migrate(databaseURL string) error {

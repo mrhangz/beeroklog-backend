@@ -48,7 +48,7 @@ func (h *AuthHandler) Google(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := verifyGoogleIDToken(r.Context(), req.IDToken, h.cfg.GoogleClientID)
+	payload, err := verifyGoogleIDToken(r.Context(), req.IDToken, h.cfg.GoogleClientIDs)
 	if err != nil {
 		respondError(w, http.StatusUnauthorized, "invalid google token: "+err.Error())
 		return
@@ -70,7 +70,7 @@ type googlePayload struct {
 	Picture string `json:"picture"`
 }
 
-func verifyGoogleIDToken(ctx context.Context, idToken, clientID string) (*googlePayload, error) {
+func verifyGoogleIDToken(ctx context.Context, idToken string, clientIDs []string) (*googlePayload, error) {
 	url := "https://oauth2.googleapis.com/tokeninfo?id_token=" + idToken
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	resp, err := http.DefaultClient.Do(req)
@@ -92,8 +92,17 @@ func verifyGoogleIDToken(ctx context.Context, idToken, clientID string) (*google
 		return nil, fmt.Errorf("decode google response: %w", err)
 	}
 
-	if clientID != "" && result.Aud != clientID {
-		return nil, fmt.Errorf("audience mismatch: got %s", result.Aud)
+	if len(clientIDs) > 0 {
+		matched := false
+		for _, clientID := range clientIDs {
+			if result.Aud == clientID {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil, fmt.Errorf("audience mismatch: got %s", result.Aud)
+		}
 	}
 
 	return &result.googlePayload, nil

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"time"
 )
 
@@ -13,7 +14,7 @@ type Config struct {
 	JWTAccessTTL  time.Duration
 	JWTRefreshTTL time.Duration
 
-	GoogleClientID string
+	GoogleClientIDs []string
 
 	AppleTeamID        string
 	AppleClientID      string
@@ -37,7 +38,7 @@ func Load() *Config {
 		JWTAccessTTL:  parseDuration(envOr("JWT_ACCESS_TTL", "15m")),
 		JWTRefreshTTL: parseDuration(envOr("JWT_REFRESH_TTL", "720h")),
 
-		GoogleClientID: os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientIDs: parseCommaSeparatedEnv("GOOGLE_CLIENT_IDS", "GOOGLE_CLIENT_ID"),
 
 		AppleTeamID:         os.Getenv("APPLE_TEAM_ID"),
 		AppleClientID:       os.Getenv("APPLE_CLIENT_ID"),
@@ -66,4 +67,27 @@ func parseDuration(s string) time.Duration {
 		return 15 * time.Minute
 	}
 	return d
+}
+
+func parseCommaSeparatedEnv(keys ...string) []string {
+	for _, key := range keys {
+		value := os.Getenv(key)
+		if value == "" {
+			continue
+		}
+
+		parts := strings.Split(value, ",")
+		var cleaned []string
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				cleaned = append(cleaned, trimmed)
+			}
+		}
+		if len(cleaned) > 0 {
+			return cleaned
+		}
+	}
+
+	return nil
 }
