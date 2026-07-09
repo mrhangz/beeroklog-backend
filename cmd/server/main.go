@@ -66,6 +66,14 @@ func main() {
 	})
 
 	r.Route("/api", func(r chi.Router) {
+		// Read-only endpoints for the public web experience (no account
+		// required to browse the community feed and beer pages).
+		r.Route("/public", func(r chi.Router) {
+			r.Get("/feed", feedH.Latest)
+			r.Get("/feed/beer/{beerId}", feedH.ByBeer)
+			r.Get("/beers/{id}", beerH.Get)
+		})
+
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/google", authH.Google)
 			r.Post("/apple", authH.Apple)
@@ -101,8 +109,13 @@ func main() {
 		})
 
 		r.Route("/photos", func(r chi.Router) {
-			r.Use(authMW.Verify)
-			r.Post("/upload", photoH.Upload)
+			r.Group(func(r chi.Router) {
+				r.Use(authMW.Verify)
+				r.Post("/upload", photoH.Upload)
+			})
+			// Reads are public so browser <img> tags (which cannot send
+			// Authorization headers) can load review photos. Keys are
+			// unguessable UUIDs and redirect to short-lived presigned URLs.
 			r.Get("/{key}", photoH.Get)
 			r.Get("/{key}/*", photoH.Get)
 		})
