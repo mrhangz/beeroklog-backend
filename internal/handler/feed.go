@@ -21,6 +21,7 @@ func NewFeed(db *pgxpool.Pool) *FeedHandler {
 // Latest returns the most recent reviews from all users.
 func (h *FeedHandler) Latest(w http.ResponseWriter, r *http.Request) {
 	page, perPage := parsePage(r)
+	sortCol := parseSort(r)
 	offset := (page - 1) * perPage
 
 	var totalCount int
@@ -36,7 +37,7 @@ func (h *FeedHandler) Latest(w http.ResponseWriter, r *http.Request) {
 		 FROM reviews r
 		 JOIN beers b ON b.id = r.beer_id
 		 JOIN users u ON u.id = r.user_id
-		 ORDER BY r.created_at DESC
+		 ORDER BY `+sortCol+` DESC
 		 LIMIT $1 OFFSET $2`, perPage, offset)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "query failed")
@@ -67,6 +68,7 @@ func (h *FeedHandler) Latest(w http.ResponseWriter, r *http.Request) {
 func (h *FeedHandler) ByBeer(w http.ResponseWriter, r *http.Request) {
 	beerID := chi.URLParam(r, "beerId")
 	page, perPage := parsePage(r)
+	sortCol := parseSort(r)
 	offset := (page - 1) * perPage
 
 	var totalCount int
@@ -85,7 +87,7 @@ func (h *FeedHandler) ByBeer(w http.ResponseWriter, r *http.Request) {
 		 JOIN beers b ON b.id = r.beer_id
 		 JOIN users u ON u.id = r.user_id
 		 WHERE r.beer_id = $1
-		 ORDER BY r.created_at DESC
+		 ORDER BY `+sortCol+` DESC
 		 LIMIT $2 OFFSET $3`, beerID, perPage, offset)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "query failed")
@@ -116,6 +118,7 @@ func (h *FeedHandler) ByBeer(w http.ResponseWriter, r *http.Request) {
 func (h *FeedHandler) ByUser(w http.ResponseWriter, r *http.Request) {
 	targetUserID := chi.URLParam(r, "userId")
 	page, perPage := parsePage(r)
+	sortCol := parseSort(r)
 	offset := (page - 1) * perPage
 
 	var totalCount int
@@ -134,7 +137,7 @@ func (h *FeedHandler) ByUser(w http.ResponseWriter, r *http.Request) {
 		 JOIN beers b ON b.id = r.beer_id
 		 JOIN users u ON u.id = r.user_id
 		 WHERE r.user_id = $1
-		 ORDER BY r.created_at DESC
+		 ORDER BY `+sortCol+` DESC
 		 LIMIT $2 OFFSET $3`, targetUserID, perPage, offset)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "query failed")

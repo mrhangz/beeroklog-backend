@@ -30,3 +30,14 @@ func parsePage(r *http.Request) (page, perPage int) {
 	}
 	return
 }
+
+// parseSort returns a safe SQL column expression for feed ordering.
+// Allowed values: created_at (default), tasted_at.
+func parseSort(r *http.Request) string {
+	switch r.URL.Query().Get("sort") {
+	case "tasted_at":
+		return "r.tasted_at"
+	default:
+		return "r.created_at"
+	}
+}
