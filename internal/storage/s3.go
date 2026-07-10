@@ -60,6 +60,40 @@ func (s *S3) Upload(ctx context.Context, key string, body io.Reader, contentType
 	return err
 }
 
+// Object is a downloaded S3 object ready to stream to an HTTP client.
+type Object struct {
+	Body        io.ReadCloser
+	ContentType string
+	Size        int64
+}
+
+// Get downloads an object from S3. Caller must Close Body.
+func (s *S3) Get(ctx context.Context, key string) (*Object, error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	contentType := "application/octet-stream"
+	if out.ContentType != nil && *out.ContentType != "" {
+		contentType = *out.ContentType
+	}
+
+	var size int64
+	if out.ContentLength != nil {
+		size = *out.ContentLength
+	}
+
+	return &Object{
+		Body:        out.Body,
+		ContentType: contentType,
+		Size:        size,
+	}, nil
+}
+
 func (s *S3) PresignedURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
 	presigner := s3.NewPresignClient(s.client)
 	req, err := presigner.PresignGetObject(ctx, &s3.GetObjectInput{

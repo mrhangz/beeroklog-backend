@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -66,7 +68,11 @@ func (h *PhotoHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Get redirects to a presigned S3 URL for the photo.
+// Get streams the photo from S3 through the API.
+//
+// We proxy bytes instead of redirecting to a presigned MinIO URL so browsers
+// and mobile clients never need to reach the internal Docker hostname
+// (e.g. http://minio:9000), which is unreachable outside the compose network.
 func (h *PhotoHandler) Get(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 	// support nested paths like photos/uuid.jpg
@@ -74,11 +80,23 @@ func (h *PhotoHandler) Get(w http.ResponseWriter, r *http.Request) {
 		key = key + "/" + rest
 	}
 
-	url, err := h.s3.PresignedURL(r.Context(), key, 15*time.Minute)
+	obj, err := h.s3.Get(r.Context(), key)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to generate url")
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
+			respondError(w, http.StatusNotFound, "photo not found")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "failed to fetch photo")
 		return
 	}
+	defer obj.Body.Close()
 
-	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+	w.Header().Set("Content-Type", obj.ContentType)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if obj.Size > 0 {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, obj.Body)
 }
