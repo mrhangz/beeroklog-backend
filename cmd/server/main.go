@@ -71,6 +71,7 @@ func main() {
 		r.Route("/public", func(r chi.Router) {
 			r.Get("/feed", feedH.Latest)
 			r.Get("/feed/beer/{beerId}", feedH.ByBeer)
+			r.Get("/beers", beerH.List)
 			r.Get("/beers/{id}", beerH.Get)
 		})
 

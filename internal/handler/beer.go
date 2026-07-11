@@ -37,7 +37,8 @@ func (h *BeerHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.db.Query(r.Context(),
 		`SELECT b.id, b.name, b.brewery, b.style, b.abv, b.created_by, b.created_at,
-		        COALESCE(avg(r.rating), 0), count(r.id)
+		        COALESCE(avg(r.rating) FILTER (WHERE r.rating > 0), 0),
+		        count(r.id) FILTER (WHERE r.rating > 0)
 		 FROM beers b
 		 LEFT JOIN reviews r ON r.beer_id = b.id
 		 WHERE $1 = '' OR lower(b.name) LIKE lower($2) OR lower(b.brewery) LIKE lower($2)
@@ -84,7 +85,8 @@ func (h *BeerHandler) Get(w http.ResponseWriter, r *http.Request) {
 	var cnt int
 	err := h.db.QueryRow(r.Context(),
 		`SELECT b.id, b.name, b.brewery, b.style, b.abv, b.created_by, b.created_at,
-		        COALESCE(avg(r.rating), 0), count(r.id)
+		        COALESCE(avg(r.rating) FILTER (WHERE r.rating > 0), 0),
+		        count(r.id) FILTER (WHERE r.rating > 0)
 		 FROM beers b
 		 LEFT JOIN reviews r ON r.beer_id = b.id
 		 WHERE b.id = $1
