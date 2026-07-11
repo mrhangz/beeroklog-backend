@@ -25,7 +25,9 @@ func (h *FeedHandler) Latest(w http.ResponseWriter, r *http.Request) {
 	offset := (page - 1) * perPage
 
 	var totalCount int
-	if err := h.db.QueryRow(r.Context(), `SELECT count(*) FROM reviews`).Scan(&totalCount); err != nil {
+	if err := h.db.QueryRow(r.Context(),
+		`SELECT count(*) FROM reviews r WHERE `+publishedReviewSQL,
+	).Scan(&totalCount); err != nil {
 		respondError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
@@ -37,6 +39,7 @@ func (h *FeedHandler) Latest(w http.ResponseWriter, r *http.Request) {
 		 FROM reviews r
 		 JOIN beers b ON b.id = r.beer_id
 		 JOIN users u ON u.id = r.user_id
+		 WHERE `+publishedReviewSQL+`
 		 ORDER BY `+sortCol+` DESC
 		 LIMIT $1 OFFSET $2`, perPage, offset)
 	if err != nil {
@@ -73,7 +76,7 @@ func (h *FeedHandler) ByBeer(w http.ResponseWriter, r *http.Request) {
 
 	var totalCount int
 	if err := h.db.QueryRow(r.Context(),
-		`SELECT count(*) FROM reviews WHERE beer_id = $1`, beerID,
+		`SELECT count(*) FROM reviews r WHERE r.beer_id = $1 AND `+publishedReviewSQL, beerID,
 	).Scan(&totalCount); err != nil {
 		respondError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -86,7 +89,7 @@ func (h *FeedHandler) ByBeer(w http.ResponseWriter, r *http.Request) {
 		 FROM reviews r
 		 JOIN beers b ON b.id = r.beer_id
 		 JOIN users u ON u.id = r.user_id
-		 WHERE r.beer_id = $1
+		 WHERE r.beer_id = $1 AND `+publishedReviewSQL+`
 		 ORDER BY `+sortCol+` DESC
 		 LIMIT $2 OFFSET $3`, beerID, perPage, offset)
 	if err != nil {
@@ -123,7 +126,7 @@ func (h *FeedHandler) ByUser(w http.ResponseWriter, r *http.Request) {
 
 	var totalCount int
 	if err := h.db.QueryRow(r.Context(),
-		`SELECT count(*) FROM reviews WHERE user_id = $1`, targetUserID,
+		`SELECT count(*) FROM reviews r WHERE r.user_id = $1 AND `+publishedReviewSQL, targetUserID,
 	).Scan(&totalCount); err != nil {
 		respondError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -136,7 +139,7 @@ func (h *FeedHandler) ByUser(w http.ResponseWriter, r *http.Request) {
 		 FROM reviews r
 		 JOIN beers b ON b.id = r.beer_id
 		 JOIN users u ON u.id = r.user_id
-		 WHERE r.user_id = $1
+		 WHERE r.user_id = $1 AND `+publishedReviewSQL+`
 		 ORDER BY `+sortCol+` DESC
 		 LIMIT $2 OFFSET $3`, targetUserID, perPage, offset)
 	if err != nil {

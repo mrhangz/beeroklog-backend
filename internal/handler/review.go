@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -124,19 +125,16 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	beerID := req.BeerID
 	if beerID == "" && req.Beer != nil {
-		if req.Beer.Name == "" {
+		if strings.TrimSpace(req.Beer.Name) == "" {
 			respondError(w, http.StatusBadRequest, "beer name is required")
 			return
 		}
-		err := tx.QueryRow(ctx,
-			`INSERT INTO beers (name, brewery, style, abv, created_by)
-			 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-			req.Beer.Name, req.Beer.Brewery, req.Beer.Style, req.Beer.ABV, userID,
-		).Scan(&beerID)
+		id, err := findOrCreateBeer(ctx, tx, userID, req.Beer)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "insert beer failed")
 			return
 		}
+		beerID = id
 	}
 
 	if beerID == "" {
@@ -176,10 +174,9 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rev.Photos = []model.ReviewPhoto{}
-	reviews := []model.Review{rev}
-	if err := loadPhotos(ctx, h.db, reviews); err == nil {
-		rev = reviews[0]
+	if err := attachBeerAndPhotos(ctx, h.db, &rev); err != nil {
+		respondError(w, http.StatusInternalServerError, "reload failed")
+		return
 	}
 
 	respondJSON(w, http.StatusCreated, rev)
@@ -199,16 +196,8 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "rating must be between 0 and 5")
 		return
 	}
-	if req.Beer != nil {
-		if req.Beer.Name == "" {
-			respondError(w, http.StatusBadRequest, "beer name is required")
-			return
-		}
-		if req.Beer.ABV != nil && (*req.Beer.ABV < 0 || *req.Beer.ABV > 100) {
-			respondError(w, http.StatusBadRequest, "abv must be between 0 and 100")
-			return
-		}
-	}
+	// Beer catalog fields on update are ignored: beers are global master data.
+	// Clients should not mutate shared beer rows via pour/review edits.
 
 	ctx := r.Context()
 	tx, err := h.db.Begin(ctx)
@@ -218,11 +207,11 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Verify ownership and load linked beer.
-	var beerID string
+	// Verify ownership.
+	var exists bool
 	if err := tx.QueryRow(ctx,
-		`SELECT beer_id FROM reviews WHERE id = $1 AND user_id = $2`, id, userID,
-	).Scan(&beerID); err != nil {
+		`SELECT EXISTS(SELECT 1 FROM reviews WHERE id = $1 AND user_id = $2)`, id, userID,
+	).Scan(&exists); err != nil || !exists {
 		respondError(w, http.StatusNotFound, "review not found")
 		return
 	}
@@ -242,15 +231,6 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.TastedAt != nil {
 		if _, err := tx.Exec(ctx, `UPDATE reviews SET tasted_at = $1, updated_at = now() WHERE id = $2`, *req.TastedAt, id); err != nil {
 			respondError(w, http.StatusInternalServerError, "update failed")
-			return
-		}
-	}
-	if req.Beer != nil {
-		if _, err := tx.Exec(ctx,
-			`UPDATE beers SET name = $1, brewery = $2, style = $3, abv = $4 WHERE id = $5`,
-			req.Beer.Name, req.Beer.Brewery, req.Beer.Style, req.Beer.ABV, beerID,
-		); err != nil {
-			respondError(w, http.StatusInternalServerError, "update beer failed")
 			return
 		}
 	}
@@ -303,10 +283,9 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rev.Photos = []model.ReviewPhoto{}
-	reviews := []model.Review{rev}
-	if err := loadPhotos(ctx, h.db, reviews); err == nil {
-		rev = reviews[0]
+	if err := attachBeerAndPhotos(ctx, h.db, &rev); err != nil {
+		respondError(w, http.StatusInternalServerError, "reload failed")
+		return
 	}
 
 	respondJSON(w, http.StatusOK, rev)
