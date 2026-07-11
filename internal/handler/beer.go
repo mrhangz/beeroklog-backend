@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -107,22 +108,35 @@ func (h *BeerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name == "" {
+	if strings.TrimSpace(req.Name) == "" {
 		respondError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 
-	var b model.Beer
-	err := h.db.QueryRow(r.Context(),
-		`INSERT INTO beers (name, brewery, style, abv, created_by)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id, name, brewery, style, abv, created_by, created_at`,
-		req.Name, req.Brewery, req.Style, req.ABV, userID,
-	).Scan(&b.ID, &b.Name, &b.Brewery, &b.Style, &b.ABV, &b.CreatedBy, &b.CreatedAt)
+	ctx := r.Context()
+	tx, err := h.db.Begin(ctx)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "insert failed")
+		respondError(w, http.StatusInternalServerError, "tx begin failed")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Reuse an existing catalog row when name+brewery already match
+	// (case-insensitive). Prevents new duplicates from direct creates.
+	beerID, err := findOrCreateBeer(ctx, tx, userID, &req)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "insert beer failed")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		respondError(w, http.StatusInternalServerError, "commit failed")
 		return
 	}
 
+	b, err := loadBeerWithAggregates(ctx, h.db, beerID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "reload failed")
+		return
+	}
 	respondJSON(w, http.StatusCreated, b)
 }

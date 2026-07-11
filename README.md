@@ -48,6 +48,28 @@ Rules enforced in handlers:
 4. Beer `avg_rating` / `review_count` ignore `rating = 0`.
 5. `GET /api/reviews` returns the signed-in user’s full journal (including log-only).
 
+## Admin catalog
+
+Admins (`users.is_admin`) can edit beer master data and merge duplicates.
+
+Grant admin by setting `ADMIN_EMAILS=you@example.com` (applied on sign-in/`/me`)
+or:
+
+```sql
+UPDATE users SET is_admin = true WHERE email = 'you@example.com';
+```
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/admin/beers/duplicates` | Exact name+brewery duplicate groups |
+| POST | `/api/admin/beers/merge` | Manual merge (`keep_id`, `merge_ids`) |
+| POST | `/api/admin/beers/dedupe-exact` | Auto-merge all exact groups |
+| PATCH | `/api/admin/beers/{id}` | Edit catalog fields |
+
+Prevention: `POST /api/beers` and review create both find-or-create by case-insensitive name+brewery so identical info reuses a row.
+
+Web UI: `/admin/catalog`.
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for diagrams, routes, conventions, and testing.
 
 ## Stack

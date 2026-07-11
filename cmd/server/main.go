@@ -93,6 +93,15 @@ func main() {
 			r.Post("/", beerH.Create)
 		})
 
+		r.Route("/admin", func(r chi.Router) {
+			r.Use(authMW.Verify)
+			r.Use(middleware.RequireAdmin(authH))
+			r.Get("/beers/duplicates", beerH.ListDuplicates)
+			r.Post("/beers/merge", beerH.Merge)
+			r.Post("/beers/dedupe-exact", beerH.DedupeExact)
+			r.Patch("/beers/{id}", beerH.Update)
+		})
+
 		r.Route("/reviews", func(r chi.Router) {
 			r.Use(authMW.Verify)
 			r.Get("/", reviewH.List)

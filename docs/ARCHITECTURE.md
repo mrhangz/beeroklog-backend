@@ -93,6 +93,19 @@ Editable: `rating`, `review_text`, `tasted_at`, `photo_keys`.
 Ignored: nested `beer` (catalog is master data).  
 Rating range: **0–5**.
 
+### Admin catalog
+
+`users.is_admin` gates `/api/admin/*`. Grant via `ADMIN_EMAILS` (on sign-in/`/me`) or SQL.
+
+| Endpoint | Behavior |
+|----------|----------|
+| `PATCH /api/admin/beers/{id}` | Edit name/brewery/style/abv |
+| `GET /api/admin/beers/duplicates` | Groups with identical lower(name)+lower(brewery) |
+| `POST /api/admin/beers/merge` | Reassign reviews to `keep_id`, delete `merge_ids` |
+| `POST /api/admin/beers/dedupe-exact` | Auto-merge each exact group (keep most rated reviews, then oldest) |
+
+Exact-match creation reuse lives in `findOrCreateBeer` (review create + `POST /api/beers`). Fuzzy/typo merges stay manual for now.
+
 Shared SQL lives in `internal/handler/beer_helpers.go` (`publishedReviewSQL`, `beerAggregateSelect`, `findOrCreateBeer`, `attachBeerAndPhotos`).
 
 ## API map

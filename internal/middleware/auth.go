@@ -116,3 +116,27 @@ func GetUserID(ctx context.Context) string {
 	id, _ := ctx.Value(UserIDKey).(string)
 	return id
 }
+
+// AdminChecker loads whether the authenticated user is an admin.
+type AdminChecker interface {
+	IsAdmin(ctx context.Context, userID string) (bool, error)
+}
+
+// RequireAdmin rejects non-admin users with 403. Must run after Verify.
+func RequireAdmin(checker AdminChecker) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID := GetUserID(r.Context())
+			if userID == "" {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+			ok, err := checker.IsAdmin(r.Context(), userID)
+			if err != nil || !ok {
+				http.Error(w, `{"error":"admin access required"}`, http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

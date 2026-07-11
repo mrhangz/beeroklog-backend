@@ -242,12 +242,15 @@ func parseRSAPublicKey(k appleJWK) (*rsa.PublicKey, error) {
 func (h *AuthHandler) findOrCreateUser(ctx context.Context, provider, providerID, email, name, avatarURL string) (*model.User, error) {
 	var user model.User
 	err := h.db.QueryRow(ctx,
-		`SELECT id, email, display_name, avatar_url, auth_provider, auth_provider_id, created_at
+		`SELECT id, email, display_name, avatar_url, is_admin, auth_provider, auth_provider_id, created_at
 		 FROM users WHERE auth_provider = $1 AND auth_provider_id = $2`,
 		provider, providerID,
-	).Scan(&user.ID, &user.Email, &user.DisplayName, &user.AvatarURL, &user.AuthProvider, &user.AuthProviderID, &user.CreatedAt)
+	).Scan(&user.ID, &user.Email, &user.DisplayName, &user.AvatarURL, &user.IsAdmin, &user.AuthProvider, &user.AuthProviderID, &user.CreatedAt)
 
 	if err == nil {
+		if err := h.grantAdminIfConfigured(ctx, &user); err != nil {
+			return nil, err
+		}
 		return &user, nil
 	}
 
@@ -264,14 +267,42 @@ func (h *AuthHandler) findOrCreateUser(ctx context.Context, provider, providerID
 		`INSERT INTO users (email, display_name, avatar_url, auth_provider, auth_provider_id)
 		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (auth_provider, auth_provider_id) DO UPDATE SET email = EXCLUDED.email
-		 RETURNING id, email, display_name, avatar_url, auth_provider, auth_provider_id, created_at`,
+		 RETURNING id, email, display_name, avatar_url, is_admin, auth_provider, auth_provider_id, created_at`,
 		email, displayName, avatarURL, provider, providerID,
-	).Scan(&user.ID, &user.Email, &user.DisplayName, &user.AvatarURL, &user.AuthProvider, &user.AuthProviderID, &user.CreatedAt)
+	).Scan(&user.ID, &user.Email, &user.DisplayName, &user.AvatarURL, &user.IsAdmin, &user.AuthProvider, &user.AuthProviderID, &user.CreatedAt)
 
 	if err != nil {
 		return nil, fmt.Errorf("insert user: %w", err)
 	}
+	if err := h.grantAdminIfConfigured(ctx, &user); err != nil {
+		return nil, err
+	}
 	return &user, nil
+}
+
+// grantAdminIfConfigured sets is_admin when the email is listed in ADMIN_EMAILS.
+// Never clears an existing admin flag.
+func (h *AuthHandler) grantAdminIfConfigured(ctx context.Context, user *model.User) error {
+	if user.IsAdmin {
+		return nil
+	}
+	for _, email := range h.cfg.AdminEmails {
+		if strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(user.Email)) {
+			if _, err := h.db.Exec(ctx, `UPDATE users SET is_admin = true WHERE id = $1`, user.ID); err != nil {
+				return fmt.Errorf("grant admin: %w", err)
+			}
+			user.IsAdmin = true
+			return nil
+		}
+	}
+	return nil
+}
+
+// IsAdmin implements middleware.AdminChecker.
+func (h *AuthHandler) IsAdmin(ctx context.Context, userID string) (bool, error) {
+	var isAdmin bool
+	err := h.db.QueryRow(ctx, `SELECT is_admin FROM users WHERE id = $1`, userID).Scan(&isAdmin)
+	return isAdmin, err
 }
 
 func (h *AuthHandler) issueTokens(w http.ResponseWriter, userID string) {
@@ -308,11 +339,15 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 	var user model.User
 	err := h.db.QueryRow(r.Context(),
-		`SELECT id, email, display_name, avatar_url, auth_provider, auth_provider_id, created_at
+		`SELECT id, email, display_name, avatar_url, is_admin, auth_provider, auth_provider_id, created_at
 		 FROM users WHERE id = $1`, userID,
-	).Scan(&user.ID, &user.Email, &user.DisplayName, &user.AvatarURL, &user.AuthProvider, &user.AuthProviderID, &user.CreatedAt)
+	).Scan(&user.ID, &user.Email, &user.DisplayName, &user.AvatarURL, &user.IsAdmin, &user.AuthProvider, &user.AuthProviderID, &user.CreatedAt)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err := h.grantAdminIfConfigured(r.Context(), &user); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to sync admin flag")
 		return
 	}
 

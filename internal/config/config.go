@@ -23,9 +23,13 @@ type Config struct {
 
 	GoogleClientIDs []string
 
-	AppleTeamID        string
-	AppleClientID      string
-	AppleKeyID         string
+	// AdminEmails grants is_admin=true on sign-in /me when the user's email
+	// matches (case-insensitive). Does not auto-revoke manual grants.
+	AdminEmails []string
+
+	AppleTeamID         string
+	AppleClientID       string
+	AppleKeyID          string
 	ApplePrivateKeyPath string
 
 	S3Endpoint     string
@@ -49,6 +53,7 @@ func Load() *Config {
 		JWTRefreshTTL: parseDuration(envOr("JWT_REFRESH_TTL", "720h")),
 
 		GoogleClientIDs: parseCommaSeparatedEnv("GOOGLE_CLIENT_IDS", "GOOGLE_CLIENT_ID"),
+		AdminEmails:     parseCommaSeparatedEnv("ADMIN_EMAILS"),
 
 		AppleTeamID:         os.Getenv("APPLE_TEAM_ID"),
 		AppleClientID:       os.Getenv("APPLE_CLIENT_ID"),
