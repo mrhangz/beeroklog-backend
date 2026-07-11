@@ -199,6 +199,16 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "rating must be between 0 and 5")
 		return
 	}
+	if req.Beer != nil {
+		if req.Beer.Name == "" {
+			respondError(w, http.StatusBadRequest, "beer name is required")
+			return
+		}
+		if req.Beer.ABV != nil && (*req.Beer.ABV < 0 || *req.Beer.ABV > 100) {
+			respondError(w, http.StatusBadRequest, "abv must be between 0 and 100")
+			return
+		}
+	}
 
 	ctx := r.Context()
 	tx, err := h.db.Begin(ctx)
@@ -208,11 +218,11 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Verify ownership
-	var exists bool
+	// Verify ownership and load linked beer.
+	var beerID string
 	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM reviews WHERE id = $1 AND user_id = $2)`, id, userID,
-	).Scan(&exists); err != nil || !exists {
+		`SELECT beer_id FROM reviews WHERE id = $1 AND user_id = $2`, id, userID,
+	).Scan(&beerID); err != nil {
 		respondError(w, http.StatusNotFound, "review not found")
 		return
 	}
@@ -232,6 +242,15 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.TastedAt != nil {
 		if _, err := tx.Exec(ctx, `UPDATE reviews SET tasted_at = $1, updated_at = now() WHERE id = $2`, *req.TastedAt, id); err != nil {
 			respondError(w, http.StatusInternalServerError, "update failed")
+			return
+		}
+	}
+	if req.Beer != nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE beers SET name = $1, brewery = $2, style = $3, abv = $4 WHERE id = $5`,
+			req.Beer.Name, req.Beer.Brewery, req.Beer.Style, req.Beer.ABV, beerID,
+		); err != nil {
+			respondError(w, http.StatusInternalServerError, "update beer failed")
 			return
 		}
 	}

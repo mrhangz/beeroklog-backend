@@ -35,10 +35,11 @@ type CreateReviewRequest struct {
 }
 
 type UpdateReviewRequest struct {
-	Rating     *float64 `json:"rating"`
-	ReviewText *string  `json:"review_text"`
-	TastedAt   *time.Time `json:"tasted_at"`
-	PhotoKeys  []string `json:"photo_keys"`
+	Rating     *float64           `json:"rating"`
+	ReviewText *string            `json:"review_text"`
+	TastedAt   *time.Time         `json:"tasted_at"`
+	PhotoKeys  []string           `json:"photo_keys"`
+	Beer       *CreateBeerRequest `json:"beer,omitempty"`
 }
 
 type PaginatedResponse struct {
