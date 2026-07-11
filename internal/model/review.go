@@ -3,14 +3,16 @@ package model
 import "time"
 
 type Review struct {
-	ID         string    `json:"id"`
-	UserID     string    `json:"user_id"`
-	BeerID     string    `json:"beer_id"`
-	Rating     float64   `json:"rating"`
-	ReviewText string    `json:"review_text"`
-	TastedAt   time.Time `json:"tasted_at"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	UserID        string    `json:"user_id"`
+	BeerID        string    `json:"beer_id"`
+	Rating        float64   `json:"rating"`
+	ReviewText    string    `json:"review_text"`
+	ServingSizeML *int      `json:"serving_size_ml,omitempty"`
+	ServingCount  *int      `json:"serving_count,omitempty"`
+	TastedAt      time.Time `json:"tasted_at"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 
 	Photos []ReviewPhoto `json:"photos"`
 	Beer   *Beer         `json:"beer,omitempty"`
@@ -26,19 +28,24 @@ type ReviewPhoto struct {
 }
 
 type CreateReviewRequest struct {
-	BeerID     string   `json:"beer_id"`
-	Beer       *CreateBeerRequest `json:"beer,omitempty"`
-	Rating     float64  `json:"rating"`
-	ReviewText string   `json:"review_text"`
-	TastedAt   *time.Time `json:"tasted_at"`
-	PhotoKeys  []string `json:"photo_keys"`
+	BeerID        string             `json:"beer_id"`
+	Beer          *CreateBeerRequest `json:"beer,omitempty"`
+	Rating        float64            `json:"rating"`
+	ReviewText    string             `json:"review_text"`
+	ServingSizeML *int               `json:"serving_size_ml"`
+	ServingCount  *int               `json:"serving_count"`
+	TastedAt      *time.Time         `json:"tasted_at"`
+	PhotoKeys     []string           `json:"photo_keys"`
 }
 
 type UpdateReviewRequest struct {
-	Rating     *float64   `json:"rating"`
-	ReviewText *string    `json:"review_text"`
-	TastedAt   *time.Time `json:"tasted_at"`
-	PhotoKeys  []string   `json:"photo_keys"`
+	Rating        *float64           `json:"rating"`
+	ReviewText    *string            `json:"review_text"`
+	ServingSizeML *int               `json:"serving_size_ml"`
+	ServingCount  *int               `json:"serving_count"`
+	ClearServing  bool               `json:"clear_serving"`
+	TastedAt      *time.Time         `json:"tasted_at"`
+	PhotoKeys     []string           `json:"photo_keys"`
 	// Beer is accepted for older clients but ignored: catalog rows are
 	// global master data and must not change via pour edits.
 	Beer *CreateBeerRequest `json:"beer,omitempty"`

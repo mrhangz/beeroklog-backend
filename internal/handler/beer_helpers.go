@@ -52,14 +52,25 @@ func findOrCreateBeer(ctx context.Context, tx pgx.Tx, userID string, beer *model
 
 func loadBeerByID(ctx context.Context, db *pgxpool.Pool, beerID string) (*model.Beer, error) {
 	var b model.Beer
+	var imageKey *string
 	err := db.QueryRow(ctx,
-		`SELECT id, name, brewery, style, abv, created_by, created_at
+		`SELECT id, name, brewery, style, abv, created_by, created_at, image_storage_key
 		 FROM beers WHERE id = $1`, beerID,
-	).Scan(&b.ID, &b.Name, &b.Brewery, &b.Style, &b.ABV, &b.CreatedBy, &b.CreatedAt)
+	).Scan(&b.ID, &b.Name, &b.Brewery, &b.Style, &b.ABV, &b.CreatedBy, &b.CreatedAt, &imageKey)
 	if err != nil {
 		return nil, err
 	}
+	if imageKey != nil {
+		b.ImageStorageKey = *imageKey
+	}
+	attachBeerImage(&b)
 	return &b, nil
+}
+
+func attachBeerImage(b *model.Beer) {
+	if b.ImageStorageKey != "" {
+		b.ImageURL = photoURLPath(b.ImageStorageKey)
+	}
 }
 
 func attachBeerAndPhotos(ctx context.Context, db *pgxpool.Pool, rev *model.Review) error {

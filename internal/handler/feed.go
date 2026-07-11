@@ -33,8 +33,8 @@ func (h *FeedHandler) Latest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.Query(r.Context(),
-		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.tasted_at, r.created_at, r.updated_at,
-		        b.id, b.name, b.brewery, b.style, b.abv,
+		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.serving_size_ml, r.serving_count, r.tasted_at, r.created_at, r.updated_at,
+		        b.id, b.name, b.brewery, b.style, b.abv, b.image_storage_key,
 		        u.id, u.display_name, u.avatar_url
 		 FROM reviews r
 		 JOIN beers b ON b.id = r.beer_id
@@ -83,8 +83,8 @@ func (h *FeedHandler) ByBeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.Query(r.Context(),
-		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.tasted_at, r.created_at, r.updated_at,
-		        b.id, b.name, b.brewery, b.style, b.abv,
+		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.serving_size_ml, r.serving_count, r.tasted_at, r.created_at, r.updated_at,
+		        b.id, b.name, b.brewery, b.style, b.abv, b.image_storage_key,
 		        u.id, u.display_name, u.avatar_url
 		 FROM reviews r
 		 JOIN beers b ON b.id = r.beer_id
@@ -133,8 +133,8 @@ func (h *FeedHandler) ByUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.Query(r.Context(),
-		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.tasted_at, r.created_at, r.updated_at,
-		        b.id, b.name, b.brewery, b.style, b.abv,
+		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.serving_size_ml, r.serving_count, r.tasted_at, r.created_at, r.updated_at,
+		        b.id, b.name, b.brewery, b.style, b.abv, b.image_storage_key,
 		        u.id, u.display_name, u.avatar_url
 		 FROM reviews r
 		 JOIN beers b ON b.id = r.beer_id
@@ -173,13 +173,18 @@ func scanFeedReviews(rows pgx.Rows) ([]model.Review, error) {
 		var rev model.Review
 		var beer model.Beer
 		var user model.User
+		var imageKey *string
 		if err := rows.Scan(
-			&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt,
-			&beer.ID, &beer.Name, &beer.Brewery, &beer.Style, &beer.ABV,
+			&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.ServingSizeML, &rev.ServingCount, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt,
+			&beer.ID, &beer.Name, &beer.Brewery, &beer.Style, &beer.ABV, &imageKey,
 			&user.ID, &user.DisplayName, &user.AvatarURL,
 		); err != nil {
 			return nil, err
 		}
+		if imageKey != nil {
+			beer.ImageStorageKey = *imageKey
+		}
+		attachBeerImage(&beer)
 		rev.Beer = &beer
 		rev.User = &user
 		reviews = append(reviews, rev)

@@ -40,8 +40,8 @@ func (h *ReviewHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.Query(r.Context(),
-		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.tasted_at, r.created_at, r.updated_at,
-		        b.id, b.name, b.brewery, b.style, b.abv
+		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.serving_size_ml, r.serving_count, r.tasted_at, r.created_at, r.updated_at,
+		        b.id, b.name, b.brewery, b.style, b.abv, b.image_storage_key
 		 FROM reviews r
 		 JOIN beers b ON b.id = r.beer_id
 		 WHERE r.user_id = $1
@@ -78,18 +78,23 @@ func (h *ReviewHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	var rev model.Review
 	var beer model.Beer
+	var imageKey *string
 	err := h.db.QueryRow(r.Context(),
-		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.tasted_at, r.created_at, r.updated_at,
-		        b.id, b.name, b.brewery, b.style, b.abv
+		`SELECT r.id, r.user_id, r.beer_id, r.rating, r.review_text, r.serving_size_ml, r.serving_count, r.tasted_at, r.created_at, r.updated_at,
+		        b.id, b.name, b.brewery, b.style, b.abv, b.image_storage_key
 		 FROM reviews r
 		 JOIN beers b ON b.id = r.beer_id
 		 WHERE r.id = $1 AND r.user_id = $2`, id, userID,
-	).Scan(&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt,
-		&beer.ID, &beer.Name, &beer.Brewery, &beer.Style, &beer.ABV)
+	).Scan(&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.ServingSizeML, &rev.ServingCount, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt,
+		&beer.ID, &beer.Name, &beer.Brewery, &beer.Style, &beer.ABV, &imageKey)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "review not found")
 		return
 	}
+	if imageKey != nil {
+		beer.ImageStorageKey = *imageKey
+	}
+	attachBeerImage(&beer)
 	rev.Beer = &beer
 
 	reviews := []model.Review{rev}
@@ -112,6 +117,11 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	if req.Rating < 0 || req.Rating > 5 {
 		respondError(w, http.StatusBadRequest, "rating must be between 0 and 5")
+		return
+	}
+	size, count, err := normalizeServing(req.ServingSizeML, req.ServingCount)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -149,11 +159,11 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	var rev model.Review
 	err = tx.QueryRow(ctx,
-		`INSERT INTO reviews (user_id, beer_id, rating, review_text, tasted_at)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id, user_id, beer_id, rating, review_text, tasted_at, created_at, updated_at`,
-		userID, beerID, req.Rating, req.ReviewText, tastedAt,
-	).Scan(&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt)
+		`INSERT INTO reviews (user_id, beer_id, rating, review_text, serving_size_ml, serving_count, tasted_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		 RETURNING id, user_id, beer_id, rating, review_text, serving_size_ml, serving_count, tasted_at, created_at, updated_at`,
+		userID, beerID, req.Rating, req.ReviewText, size, count, tastedAt,
+	).Scan(&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.ServingSizeML, &rev.ServingCount, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "insert review failed")
 		return
@@ -199,6 +209,18 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// Beer catalog fields on update are ignored: beers are global master data.
 	// Clients should not mutate shared beer rows via pour/review edits.
 
+	var servingSize, servingCount *int
+	if req.ClearServing {
+		// both stay nil → clear columns
+	} else if req.ServingSizeML != nil || req.ServingCount != nil {
+		var err error
+		servingSize, servingCount, err = normalizeServing(req.ServingSizeML, req.ServingCount)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	ctx := r.Context()
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
@@ -230,6 +252,15 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TastedAt != nil {
 		if _, err := tx.Exec(ctx, `UPDATE reviews SET tasted_at = $1, updated_at = now() WHERE id = $2`, *req.TastedAt, id); err != nil {
+			respondError(w, http.StatusInternalServerError, "update failed")
+			return
+		}
+	}
+	if req.ClearServing || req.ServingSizeML != nil || req.ServingCount != nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE reviews SET serving_size_ml = $1, serving_count = $2, updated_at = now() WHERE id = $3`,
+			servingSize, servingCount, id,
+		); err != nil {
 			respondError(w, http.StatusInternalServerError, "update failed")
 			return
 		}
@@ -275,9 +306,9 @@ func (h *ReviewHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	var rev model.Review
 	err = h.db.QueryRow(ctx,
-		`SELECT id, user_id, beer_id, rating, review_text, tasted_at, created_at, updated_at
+		`SELECT id, user_id, beer_id, rating, review_text, serving_size_ml, serving_count, tasted_at, created_at, updated_at
 		 FROM reviews WHERE id = $1`, id,
-	).Scan(&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt)
+	).Scan(&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.ServingSizeML, &rev.ServingCount, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "reload failed")
 		return
@@ -358,12 +389,17 @@ func scanReviewsWithBeer(rows pgx.Rows) ([]model.Review, error) {
 	for rows.Next() {
 		var rev model.Review
 		var beer model.Beer
+		var imageKey *string
 		if err := rows.Scan(
-			&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt,
-			&beer.ID, &beer.Name, &beer.Brewery, &beer.Style, &beer.ABV,
+			&rev.ID, &rev.UserID, &rev.BeerID, &rev.Rating, &rev.ReviewText, &rev.ServingSizeML, &rev.ServingCount, &rev.TastedAt, &rev.CreatedAt, &rev.UpdatedAt,
+			&beer.ID, &beer.Name, &beer.Brewery, &beer.Style, &beer.ABV, &imageKey,
 		); err != nil {
 			return nil, err
 		}
+		if imageKey != nil {
+			beer.ImageStorageKey = *imageKey
+		}
+		attachBeerImage(&beer)
 		rev.Beer = &beer
 		reviews = append(reviews, rev)
 	}

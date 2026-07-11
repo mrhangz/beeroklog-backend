@@ -11,6 +11,11 @@ type Beer struct {
 	CreatedBy *string   `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 
+	// Optional catalog pack shot (can / bottle). Storage key is the S3 object;
+	// image_url is the API path clients load in <img> tags.
+	ImageStorageKey string `json:"image_storage_key,omitempty"`
+	ImageURL        string `json:"image_url,omitempty"`
+
 	AvgRating   *float64 `json:"avg_rating,omitempty"`
 	ReviewCount *int     `json:"review_count,omitempty"`
 }
@@ -27,6 +32,8 @@ type UpdateBeerRequest struct {
 	Brewery *string  `json:"brewery"`
 	Style   *string  `json:"style"`
 	ABV     *float64 `json:"abv"`
+	// ImageStorageKey: omit = unchanged; "" = clear; non-empty = set key from upload.
+	ImageStorageKey *string `json:"image_storage_key"`
 }
 
 // MergeBeersRequest keeps one catalog row and reassigns reviews from the others.

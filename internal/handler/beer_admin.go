@@ -22,7 +22,7 @@ func (h *BeerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Name == nil && req.Brewery == nil && req.Style == nil && req.ABV == nil {
+	if req.Name == nil && req.Brewery == nil && req.Style == nil && req.ABV == nil && req.ImageStorageKey == nil {
 		respondError(w, http.StatusBadRequest, "no fields to update")
 		return
 	}
@@ -37,7 +37,11 @@ func (h *BeerHandler) Update(w http.ResponseWriter, r *http.Request) {
 			name = COALESCE($2, name),
 			brewery = COALESCE($3, brewery),
 			style = COALESCE($4, style),
-			abv = CASE WHEN $5::boolean THEN $6 ELSE abv END
+			abv = CASE WHEN $5::boolean THEN $6 ELSE abv END,
+			image_storage_key = CASE
+				WHEN $7::boolean THEN NULLIF(btrim($8), '')
+				ELSE image_storage_key
+			END
 		 WHERE id = $1`,
 		id,
 		nullIfAbsentString(req.Name),
@@ -45,6 +49,8 @@ func (h *BeerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		nullIfAbsentString(req.Style),
 		req.ABV != nil,
 		req.ABV,
+		req.ImageStorageKey != nil,
+		derefString(req.ImageStorageKey),
 	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "update failed")
@@ -67,7 +73,7 @@ func (h *BeerHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *BeerHandler) ListDuplicates(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	rows, err := h.db.Query(ctx,
-		`SELECT b.id, b.name, b.brewery, b.style, b.abv, b.created_by, b.created_at,`+beerAggregateSelect+`
+		`SELECT b.id, b.name, b.brewery, b.style, b.abv, b.created_by, b.created_at, b.image_storage_key,`+beerAggregateSelect+`
 		 FROM beers b
 		 LEFT JOIN reviews r ON r.beer_id = b.id
 		 WHERE (lower(b.name), lower(coalesce(b.brewery, ''))) IN (
@@ -87,25 +93,21 @@ func (h *BeerHandler) ListDuplicates(w http.ResponseWriter, r *http.Request) {
 	groups := []model.BeerDuplicateGroup{}
 	index := map[string]int{}
 	for rows.Next() {
-		var b model.Beer
-		var avg float64
-		var cnt int
-		if err := rows.Scan(&b.ID, &b.Name, &b.Brewery, &b.Style, &b.ABV, &b.CreatedBy, &b.CreatedAt, &avg, &cnt); err != nil {
+		b, err := scanBeerWithAggregates(rows)
+		if err != nil {
 			respondError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
-		b.AvgRating = &avg
-		b.ReviewCount = &cnt
 		key := strings.ToLower(b.Name) + "\x00" + strings.ToLower(b.Brewery)
 		if i, ok := index[key]; ok {
-			groups[i].Beers = append(groups[i].Beers, b)
+			groups[i].Beers = append(groups[i].Beers, *b)
 			continue
 		}
 		index[key] = len(groups)
 		groups = append(groups, model.BeerDuplicateGroup{
 			Name:    b.Name,
 			Brewery: b.Brewery,
-			Beers:   []model.Beer{b},
+			Beers:   []model.Beer{*b},
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -282,7 +284,12 @@ func mergeBeersTx(ctx context.Context, tx pgx.Tx, keepID string, mergeIDs []stri
 			`UPDATE beers AS keep
 			 SET brewery = CASE WHEN btrim(keep.brewery) = '' THEN src.brewery ELSE keep.brewery END,
 			     style = CASE WHEN btrim(keep.style) = '' THEN src.style ELSE keep.style END,
-			     abv = COALESCE(keep.abv, src.abv)
+			     abv = COALESCE(keep.abv, src.abv),
+			     image_storage_key = CASE
+			       WHEN keep.image_storage_key IS NULL OR btrim(keep.image_storage_key) = ''
+			       THEN src.image_storage_key
+			       ELSE keep.image_storage_key
+			     END
 			 FROM beers AS src
 			 WHERE keep.id = $1 AND src.id = $2`,
 			keepID, id,
@@ -307,21 +314,34 @@ func mergeBeersTx(ctx context.Context, tx pgx.Tx, keepID string, mergeIDs []stri
 }
 
 func loadBeerWithAggregates(ctx context.Context, db *pgxpool.Pool, id string) (*model.Beer, error) {
-	var b model.Beer
-	var avg float64
-	var cnt int
-	err := db.QueryRow(ctx,
-		`SELECT b.id, b.name, b.brewery, b.style, b.abv, b.created_by, b.created_at,`+beerAggregateSelect+`
+	row := db.QueryRow(ctx,
+		`SELECT b.id, b.name, b.brewery, b.style, b.abv, b.created_by, b.created_at, b.image_storage_key,`+beerAggregateSelect+`
 		 FROM beers b
 		 LEFT JOIN reviews r ON r.beer_id = b.id
 		 WHERE b.id = $1
 		 GROUP BY b.id`, id,
-	).Scan(&b.ID, &b.Name, &b.Brewery, &b.Style, &b.ABV, &b.CreatedBy, &b.CreatedAt, &avg, &cnt)
-	if err != nil {
+	)
+	return scanBeerWithAggregates(row)
+}
+
+type beerAggregateScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanBeerWithAggregates(row beerAggregateScanner) (*model.Beer, error) {
+	var b model.Beer
+	var avg float64
+	var cnt int
+	var imageKey *string
+	if err := row.Scan(&b.ID, &b.Name, &b.Brewery, &b.Style, &b.ABV, &b.CreatedBy, &b.CreatedAt, &imageKey, &avg, &cnt); err != nil {
 		return nil, err
+	}
+	if imageKey != nil {
+		b.ImageStorageKey = *imageKey
 	}
 	b.AvgRating = &avg
 	b.ReviewCount = &cnt
+	attachBeerImage(&b)
 	return &b, nil
 }
 
@@ -331,6 +351,13 @@ func nullIfAbsentString(v *string) *string {
 	}
 	trimmed := strings.TrimSpace(*v)
 	return &trimmed
+}
+
+func derefString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func uniqueIDs(ids []string) []string {
